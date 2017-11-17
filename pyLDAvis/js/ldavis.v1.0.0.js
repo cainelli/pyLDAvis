@@ -22,7 +22,8 @@ var LDAvis = function(to_select, data_or_file_name) {
         vis_state = {
             lambda: 1,
             topic: 0,
-            term: ""
+            term: "",
+            pagination: 0,
         };
 
     // Set up a few 'global' variables to hold the data:
@@ -35,11 +36,19 @@ var LDAvis = function(to_select, data_or_file_name) {
             old: 1,
             current: 1
         },
+        pagination = {
+            old: 0,
+            current: 0,
+            pages: 0,
+        },
         color1 = "#1f77b4", // baseline color for default topic circles and overall term frequencies
         color2 = "#d62728"; // 'highlight' color for selected topics and term-topic frequencies
 
     // Set the duration of each half of the transition:
     var duration = 750;
+
+    // documents results limit
+    var doc_limit = 15;
 
     // Set global margins used for everything
     var margin = {
@@ -69,6 +78,7 @@ var LDAvis = function(to_select, data_or_file_name) {
     // topic/lambda selection names are specific to *this* vis
     var topic_select = to_select + "-topic";
     var lambda_select = to_select + "-lambda";
+    var pagination_select = to_select + "-pagination";
 
     // get rid of the # in the to_select (useful) for setting ID values
     var visID = to_select.replace("#", "");
@@ -78,9 +88,20 @@ var LDAvis = function(to_select, data_or_file_name) {
     var topicDown = topicID + "-down";
     var topicUp = topicID + "-up";
     var topicClear = topicID + "-clear";
+    var documentSearch = visID + "-search";
+    var documentSearchQueryId = visID + "-searchQuery";
+    var paginationID = visID + "-pagination";
+    
 
     var leftPanelID = visID + "-leftpanel";
     var barFreqsID = visID + "-bar-freqs";
+    var documentListID = visID + "-document-list";
+    var pagScaleID = visID + "-pag-scale-id";
+    var documentsForeignID = visID + "-document-foreign"
+    var paginationInputID = visID + "-paginationInput";
+    var paginationZeroID = visID + "-paginationZero";
+    var sliderPagDivID = visID + "-sliderpagdiv";
+    var paginationLabelID = visID + "-paglabel";
     var topID = visID + "-top";
     var lambdaInputID = visID + "-lambdaInput";
     var lambdaZeroID = visID + "-lambdaZero";
@@ -149,10 +170,9 @@ var LDAvis = function(to_select, data_or_file_name) {
         // Create the topic input & lambda slider forms. Inspired from:
         // http://bl.ocks.org/d3noob/10632804
         // http://bl.ocks.org/d3noob/10633704
-        init_forms(topicID, lambdaID, visID);
+        init_forms(topicID, lambdaID, visID, paginationID);
 
         // When the value of lambda changes, update the visualization
-        console.log('lambda_select', lambda_select);
         d3.select(lambda_select)
             .on("mouseup", function() {
                 console.log('lambda_select mouseup');
@@ -169,6 +189,17 @@ var LDAvis = function(to_select, data_or_file_name) {
                 // store the current lambda value
                 state_save(true);
                 document.getElementById(lambdaID).value = vis_state.lambda;
+            });
+
+        // When the value of pages changes, update the visualization
+        d3.select(pagination_select)
+            .on("mouseup", function() {
+                console.log('pagination_select mouseup');
+                update_pagination(this.value)
+            })
+            .on("keyup", function() {
+                console.log('pagination_select mouseup');
+                update_pagination(this.value)
             });
 
         d3.select("#" + topicUp)
@@ -225,6 +256,12 @@ var LDAvis = function(to_select, data_or_file_name) {
                 state_reset();
                 state_save(true);
             });
+
+        d3.select("#" + documentSearch)
+        .on("click", function() {
+            const query = document.getElementById(documentSearchQueryId).value;
+            document_search(query,vis_state.pagination,doc_limit);
+        });
 
         // create linear scaling to pixels (and add some padding on outer region of scatterplot)
         var xrange = d3.extent(mdsData, function(d) {
@@ -462,6 +499,15 @@ var LDAvis = function(to_select, data_or_file_name) {
         var yAxis = d3.svg.axis()
                 .scale(y);
 
+        // Add a group for the document list 
+        var documentListDiv = svg.append("foreignObject")
+            .attr("transform", "translate(" + +(mdswidth + termwidth) + "," + 2 * margin.top + ")")
+            .attr("width", mdswidth + termwidth - margin.left)
+            .attr("display", "none")
+            .attr("id", documentsForeignID)
+            .append("xhtml:body")
+            .attr("id", documentListID);
+
         // Add a group for the bar chart
         var chart = svg.append("g")
                 .attr("transform", "translate(" + +(mdswidth + margin.left + termwidth) + "," + 2 * margin.top + ")")
@@ -594,7 +640,7 @@ var LDAvis = function(to_select, data_or_file_name) {
             .call(xAxis);
 
         // dynamically create the topic and lambda input forms at the top of the page:
-        function init_forms(topicID, lambdaID, visID) {
+        function init_forms(topicID, lambdaID, visID, paginationID) {
 
             // create container div for topic and lambda input:
             var inputDiv = document.createElement("div");
@@ -641,12 +687,74 @@ var LDAvis = function(to_select, data_or_file_name) {
             clear.innerHTML = "Clear Topic";
             topicDiv.appendChild(clear);
 
+            // var documentLabel = document.createElement("label");
+            // documentLabel.setAttribute("for", documentSearchQueryId);
+            // documentLabel.setAttribute("style", "font-family: sans-serif; font-size: 14px");
+            // documentLabel.innerHTML = "Document Search: <span id='" + documentSearchQueryId + "-value'></span>";
+            // topicDiv.appendChild(documentLabel);
+
+            var documentSearchInput = document.createElement("input");
+            documentSearchInput.setAttribute("style", "width: 400px");
+            documentSearchInput.type = "text";
+            documentSearchInput.id = documentSearchQueryId;
+            topicDiv.appendChild(documentSearchInput);
+
+            var search = document.createElement("button");
+            search.setAttribute("id", documentSearch);
+            search.setAttribute("style", "margin-left: 5px");
+            search.innerHTML = "Document Search";
+            topicDiv.appendChild(search);
+
+            
+            // document inputs
+            var paginationDivWidth = barwidth;
+            var paginationDiv = document.createElement("div");
+            paginationDiv.setAttribute("id", paginationInputID);
+            paginationDiv.setAttribute("style", "padding: 5px; background-color: #e8e8e8; height: 50px; width: " + paginationDivWidth + "px; float: right; margin-right: 30px");
+            paginationDiv.setAttribute("hidden", "");
+            inputDiv.appendChild(paginationDiv);
+
+            var paginationZero = document.createElement("div");
+            paginationZero.setAttribute("style", "padding: 5px; height: 20px; width: 220px; font-family: sans-serif; float: left");
+            paginationZero.setAttribute("id", paginationZeroID);
+            paginationDiv.appendChild(paginationZero);
+
+            var xx = d3.select("#" + paginationZeroID)
+                .append("text")
+                .attr("x", 0)
+                .attr("y", 0)
+                .style("font-size", "14px")
+                .text("Slide to navigate between pages:");
+                
+            var sliderPagDiv = document.createElement("div");
+            sliderPagDiv.setAttribute("id", sliderPagDivID);
+            sliderPagDiv.setAttribute("style", "padding: 5px; height: 40px; width: 250px; float: right; margin-top: -5px; margin-right: 10px");
+            paginationDiv.appendChild(sliderPagDiv);
+
+            var paginationInput = document.createElement("input");
+            paginationInput.setAttribute("style", "width: 250px; margin-left: 0px; margin-right: 0px");
+            paginationInput.type = "range";
+            paginationInput.min = 0;
+            // paginationInput.max = 10;
+            // paginationInput.step = data['pagination.step'];
+            paginationInput.value = vis_state.pagination;
+            paginationInput.id = paginationID;
+            paginationInput.setAttribute("list", "ticks"); // to enable automatic ticks (with no labels, see below)
+            sliderPagDiv.appendChild(paginationInput);
+
+            var paginationLabel = document.createElement("label");
+            paginationLabel.setAttribute("id", paginationLabelID);
+            paginationLabel.setAttribute("for", paginationID);
+            paginationLabel.setAttribute("style", "height: 20px; width: 60px; font-family: sans-serif; font-size: 14px; margin-left: 80px");
+            paginationLabel.innerHTML = "Page = <span id='" + paginationID + "-value'>" + vis_state.pagination + "</span>";
+            paginationDiv.appendChild(paginationLabel);
+
             // lambda inputs
             //var lambdaDivLeft = 8 + mdswidth + margin.left + termwidth;
             var lambdaDivWidth = barwidth;
             var lambdaDiv = document.createElement("div");
             lambdaDiv.setAttribute("id", lambdaInputID);
-            lambdaDiv.setAttribute("style", "padding: 5px; background-color: #e8e8e8; display: inline-block; height: 50px; width: " + lambdaDivWidth + "px; float: right; margin-right: 30px");
+            lambdaDiv.setAttribute("style", "padding: 5px; background-color: #e8e8e8; height: 50px; width: " + lambdaDivWidth + "px; float: right; margin-right: 30px");
             inputDiv.appendChild(lambdaDiv);
 
             var lambdaZero = document.createElement("div");
@@ -1006,7 +1114,6 @@ var LDAvis = function(to_select, data_or_file_name) {
         // the circle argument should be the appropriate circle element
         function topic_on(circle) {
             if (circle == null) return null;
-
             // grab data bound to this element
             var d = circle.__data__;
             var Freq = Math.round(d.Freq * 10) / 10,
@@ -1063,7 +1170,7 @@ var LDAvis = function(to_select, data_or_file_name) {
             // remove the red bars if there are any:
             d3.selectAll(to_select + " .overlay").remove();
 
-            // Change Total Frequency bars
+            // Change Total Frequency bars            
             d3.selectAll(to_select + " .bar-totals")
                 .data(dat3)
                 .attr("x", 0)
@@ -1076,7 +1183,7 @@ var LDAvis = function(to_select, data_or_file_name) {
                 })
                 .style("fill", color1)
                 .attr("opacity", 0.4);
-
+            
             // Change word labels
             d3.selectAll(to_select + " .terms")
                 .data(dat3)
@@ -1306,6 +1413,7 @@ var LDAvis = function(to_select, data_or_file_name) {
             vis_state.topic = params[0].split("=")[1];
             vis_state.lambda = params[1].split("=")[1];
             vis_state.term = params[2].split("=")[1];
+            vis_state.pagination = params[3].split("=")[1]
 
             // Idea: write a function to parse the URL string
             // only accept values in [0,1] for lambda, {0, 1, ..., K} for topics (any string is OK for term)
@@ -1330,6 +1438,10 @@ var LDAvis = function(to_select, data_or_file_name) {
             document.getElementById(lambdaID).value = vis_state.lambda;
             document.getElementById(lambdaID + "-value").innerHTML = vis_state.lambda;
 
+            // impose the value of pagination:
+            document.getElementById(paginationID).value = vis_state.pagination;
+            document.getElementById(paginationID + "-value").innerHTML = vis_state.pagination;
+            
             // select the topic and transition the order of the bars (if approporiate)
             if (!isNaN(vis_state.topic)) {
                 document.getElementById(topicID).value = vis_state.topic;
@@ -1341,13 +1453,14 @@ var LDAvis = function(to_select, data_or_file_name) {
                 }
             }
             lambda.current = vis_state.lambda;
+            pagination.current = vis_state.pagination;
             var termElem = document.getElementById(termID + vis_state.term);
             if (termElem !== undefined) term_on(termElem);
         }
 
         function state_url() {
             return location.origin + location.pathname + "#topic=" + vis_state.topic +
-                "&lambda=" + vis_state.lambda + "&term=" + vis_state.term;
+                "&lambda=" + vis_state.lambda + "&term=" + vis_state.term + "&pagination=" + vis_state.pagination;
         }
 
         function state_save(replace) {
@@ -1367,6 +1480,137 @@ var LDAvis = function(to_select, data_or_file_name) {
             vis_state.term = "";
             document.getElementById(topicID).value = vis_state.topic = 0;
             state_save(true);
+        }
+        function update_pagination(pag){
+            // store the previous pagination value
+            pagination.old = pagination.current;
+            pagination.current = document.getElementById(paginationID).value;
+            vis_state.pagination = +pag;
+            // adjust the text on the range slider
+            d3.select(pagination_select).property("value", vis_state.pagination);
+            d3.select(pagination_select + "-value").text(vis_state.pagination);
+            // transition the order of the bars
+            var increased = pagination.old < vis_state.pagination;
+
+            // store the current pagination value
+            state_save(true);
+            document.getElementById(paginationID).value = vis_state.pagination;
+            
+            const query = document.getElementById(documentSearchQueryId).value;
+            document_search(query,vis_state.pagination,doc_limit);
+        }
+        function update_search_results(data, columns){           
+            // delete previous results
+            d3.select("#" + documentListID).selectAll("*").remove();
+            console.log(d3.select("#" + pagScaleID))
+            d3.select("#" + pagScaleID).remove();
+            console.log(d3.select("#" + pagScaleID))
+
+            // update pagination info
+            pagination.pages = parseInt(data['hits']['total'] / doc_limit)
+            d3.select("#" + paginationID).attr("max",pagination.pages);
+            
+            // Create the svg to contain the slider scale:
+            var scaleContainer = d3.select("#" + sliderPagDivID).append("svg")
+                    .attr("id", pagScaleID)
+                    .attr("width", 250)
+                    .attr("height", 25);
+
+            var sliderPagScale = d3.scale.linear()
+                    .domain([0, pagination.pages])
+                    .range([7.5, 242.5])  // trimmed by 7.5px on each side to match the input type=range slider:
+                    .nice();
+
+            // adapted from http://bl.ocks.org/mbostock/1166403
+            var sliderPagAxis = d3.svg.axis()
+                    .scale(sliderPagScale)
+                    .orient("bottom")
+                    .tickFormat(d3.format("d"))
+                    .tickSize(10)
+                    .tickSubdivide(true)
+                    .ticks(6);
+
+            // group to contain the elements of the slider axis:
+            var sliderPagAxisGroup = scaleContainer.append("g")
+                    .attr("class", "slideraxis")
+                    .attr("margin-top", "-10px")
+                    .call(sliderPagAxis);
+            
+            console.log(pagination.pages)
+
+            // create documents table
+            var sortAscending = true;
+            var table = d3.select("#" + documentListID).append('table');
+            var titles = columns;
+            var headers = table.append('thead').append('tr')
+                                .selectAll('th')
+                                .data(titles).enter()
+                                .append('th')
+                                .text(function (d) {
+                                return d;
+                                })
+                                .on('click', function (d) {
+                                headers.attr('class', 'header');
+                                
+                                if (sortAscending) {
+                                    rows.sort(function(a, b) { return b[d] < a[d]; });
+                                    sortAscending = false;
+                                    this.className = 'aes';
+                                } else {
+                                rows.sort(function(a, b) { return b[d] > a[d]; });
+                                sortAscending = true;
+                                this.className = 'des';
+                                }
+                                
+                                });
+                
+                var rows = table.append('tbody').selectAll('tr')
+                            .data(data['hits']['hits']).enter()
+                            .append('tr');
+                rows.selectAll('td')
+                .data(function (d) {
+                    return titles.map(function (k) {
+                    return { 'value': d['_source'][k], 'name': k};
+                    });
+                }).enter()
+                .append('td')
+                .attr('data-th', function (d) {
+                    return d.name;
+                })
+                .text(function (d) {
+                    return d.value;
+                });
+        }
+
+        function show_documents(){
+            // hide terms results
+            d3.select("#" + barFreqsID).attr("display", "none");
+            d3.select("#" + lambdaInputID).attr("hidden", "");
+
+            // show documents results
+            d3.select("#" + documentsForeignID).attr("display", "flex");
+            d3.select("#" + paginationInputID).attr("hidden", null);
+        }
+
+        function document_search(query='*', from=0, size=15) {
+            show_documents();
+
+            var request = new XMLHttpRequest();
+            request.onreadystatechange = function() {
+                if (request.readyState === 4) {
+                    if (request.status === 200) {
+                        const res = JSON.parse(request.responseText)
+                        console.log(res);
+                        update_search_results(res, ['subject'])
+                    } else {
+                        console.log(request.responseText);
+                    }
+                }
+            };
+
+            request.open("GET", `http://localhost:9200/demo1/_search?size=${size}&from=${from}&q=${query}` , true);
+            request.setRequestHeader("Authorization", "Basic " + btoa("elastic:changeme"));
+            request.send(null);
         }
 
     }
